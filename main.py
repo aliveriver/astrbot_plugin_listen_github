@@ -35,7 +35,9 @@ class GitHubListenPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.poll_interval: int = max(config.get("poll_interval", 1800), 60)  # 最低 60 秒
+        self.poll_interval: int = max(
+            config.get("poll_interval", 1800), 60
+        )  # 最低 60 秒
         self.max_entries: int = config.get("max_entries", 5)
         # JSON 配置中的监听列表
         self.cfg_watch_users: List[str] = config.get("watch_users", [])
@@ -78,23 +80,29 @@ class GitHubListenPlugin(Star):
         # 1) 收集 JSON 配置中要推送到所有 bound_sessions 的目标
         cfg_targets = []  # [(feed_url, display_name, kv_key), ...]
         for user in self.cfg_watch_users:
-            cfg_targets.append((
-                GITHUB_USER_FEED.format(username=user),
-                f"user {user}",
-                f"user_{user}",
-            ))
+            cfg_targets.append(
+                (
+                    GITHUB_USER_FEED.format(username=user),
+                    f"user {user}",
+                    f"user_{user}",
+                )
+            )
         for repo in self.cfg_watch_repos:
-            cfg_targets.append((
-                GITHUB_REPO_FEED.format(repo=repo),
-                f"📦 {repo} (Release)",
-                f"repo_rel_{repo.replace('/', '_')}",
-            ))
+            cfg_targets.append(
+                (
+                    GITHUB_REPO_FEED.format(repo=repo),
+                    f"📦 {repo} (Release)",
+                    f"repo_rel_{repo.replace('/', '_')}",
+                )
+            )
         for repo in self.cfg_watch_repos_commits:
-            cfg_targets.append((
-                GITHUB_REPO_COMMITS_FEED.format(repo=repo),
-                f"📝 {repo} (Commit)",
-                f"repo_cmt_{repo.replace('/', '_')}",
-            ))
+            cfg_targets.append(
+                (
+                    GITHUB_REPO_COMMITS_FEED.format(repo=repo),
+                    f"📝 {repo} (Commit)",
+                    f"repo_cmt_{repo.replace('/', '_')}",
+                )
+            )
 
         # 推送配置中的目标到所有绑定会话
         for feed_url, display_name, kv_key in cfg_targets:
@@ -106,9 +114,7 @@ class GitHubListenPlugin(Star):
                     try:
                         await self.context.send_message(umo, chain)
                     except Exception as e:
-                        logger.error(
-                            f"[GitHub Listen] 推送到会话失败 ({umo}): {e}"
-                        )
+                        logger.error(f"[GitHub Listen] 推送到会话失败 ({umo}): {e}")
 
         # 2) 处理通过指令动态添加的监听（按会话分组）
         cmd_watch_list = await self._get_cmd_watch_list()
@@ -123,9 +129,7 @@ class GitHubListenPlugin(Star):
                         chain = MessageChain().message(msg)
                         await self.context.send_message(umo, chain)
                 except Exception as e:
-                    logger.error(
-                        f"[GitHub Listen] 获取 {username} 动态失败: {e}"
-                    )
+                    logger.error(f"[GitHub Listen] 获取 {username} 动态失败: {e}")
 
     # ==================== RSS 获取与解析 ====================
 
@@ -157,7 +161,11 @@ class GitHubListenPlugin(Star):
         last_entry_id = await self.get_kv_data(full_kv_key, "")
 
         new_entries = []
-        scan_entries = feed.entries if self.max_entries == 0 else feed.entries[: self.max_entries * 2]
+        scan_entries = (
+            feed.entries
+            if self.max_entries == 0
+            else feed.entries[: self.max_entries * 2]
+        )
         for entry in scan_entries:
             entry_id = entry.get("id", entry.get("link", ""))
             if entry_id == last_entry_id:
@@ -198,7 +206,9 @@ class GitHubListenPlugin(Star):
                     continue
             else:
                 # feedparser 解析的 time_struct
-                if hasattr(feedparser, '_parse_date') and hasattr(feedparser._parse_date, '__call__'):
+                if hasattr(feedparser, "_parse_date") and hasattr(
+                    feedparser._parse_date, "__call__"
+                ):
                     pass
                 return time_str  # 无法解析则原样返回
 
@@ -296,9 +306,7 @@ class GitHubListenPlugin(Star):
             )
             return
 
-        feed = await self._fetch_feed(
-            GITHUB_USER_FEED.format(username=username)
-        )
+        feed = await self._fetch_feed(GITHUB_USER_FEED.format(username=username))
         if feed is None or (hasattr(feed, "bozo") and feed.bozo and not feed.entries):
             yield event.plain_result(
                 f"❌ 无法获取用户 {username} 的 GitHub 动态，请检查用户名是否正确。"
@@ -321,9 +329,7 @@ class GitHubListenPlugin(Star):
         # 记录当前最新条目 ID，避免下次轮询推送旧动态
         if feed and feed.entries:
             first_id = feed.entries[0].get("id", feed.entries[0].get("link", ""))
-            await self.put_kv_data(
-                f"{KV_LAST_ENTRY_PREFIX}user_{username}", first_id
-            )
+            await self.put_kv_data(f"{KV_LAST_ENTRY_PREFIX}user_{username}", first_id)
 
         yield event.plain_result(
             f"✅ 已添加 GitHub 用户 {username} 到监听列表。\n"
@@ -379,9 +385,7 @@ class GitHubListenPlugin(Star):
                 lines.append(f"  👤 {u}")
             for r in self.cfg_watch_repos:
                 lines.append(f"  📦 {r}")
-            lines.append(
-                f"  → 推送到 {len(self.cfg_bound_sessions)} 个绑定会话"
-            )
+            lines.append(f"  → 推送到 {len(self.cfg_bound_sessions)} 个绑定会话")
             lines.append("")
 
         # 指令动态添加的
@@ -429,7 +433,9 @@ class GitHubListenPlugin(Star):
             return
 
         entries = []
-        check_entries = feed.entries if self.max_entries == 0 else feed.entries[: self.max_entries]
+        check_entries = (
+            feed.entries if self.max_entries == 0 else feed.entries[: self.max_entries]
+        )
         for entry in check_entries:
             entries.append(
                 {
@@ -480,8 +486,7 @@ class GitHubListenPlugin(Star):
         self.config.save_config()
 
         yield event.plain_result(
-            f"✅ 已解绑当前会话。\n"
-            f"剩余 {len(self.cfg_bound_sessions)} 个绑定会话。"
+            f"✅ 已解绑当前会话。\n剩余 {len(self.cfg_bound_sessions)} 个绑定会话。"
         )
 
     # ==================== 生命周期 ====================
