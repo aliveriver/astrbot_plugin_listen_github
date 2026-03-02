@@ -9,7 +9,7 @@
         "description": "每次最多推送条目数",
         "type": "int",
         "default": 5,
-        "hint": "单次推送每个用户/仓库最多显示多少条新动态"
+        "hint": "单次推送每个用户/仓库最多显示多少条新动态，设为 0 则不限制"
     },
     "watch_users": {
         "description": "监听的 GitHub 用户列表",

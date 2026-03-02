@@ -141,7 +141,8 @@ class GitHubListenPlugin(Star):
         last_entry_id = await self.get_kv_data(full_kv_key, "")
 
         new_entries = []
-        for entry in feed.entries[: self.max_entries * 2]:
+        scan_entries = feed.entries if self.max_entries == 0 else feed.entries[: self.max_entries * 2]
+        for entry in scan_entries:
             entry_id = entry.get("id", entry.get("link", ""))
             if entry_id == last_entry_id:
                 break
@@ -155,7 +156,8 @@ class GitHubListenPlugin(Star):
                 }
             )
 
-        new_entries = new_entries[: self.max_entries]
+        if self.max_entries > 0:
+            new_entries = new_entries[: self.max_entries]
 
         if new_entries:
             await self.put_kv_data(full_kv_key, new_entries[0]["id"])
@@ -375,7 +377,8 @@ class GitHubListenPlugin(Star):
             return
 
         entries = []
-        for entry in feed.entries[: self.max_entries]:
+        check_entries = feed.entries if self.max_entries == 0 else feed.entries[: self.max_entries]
+        for entry in check_entries:
             entries.append(
                 {
                     "id": entry.get("id", ""),
