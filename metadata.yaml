@@ -1,7 +1,7 @@
 name: astrbot_plugin_listen_github
 display_name: GitHub 动态监听
-desc: 通过 RSS 定时获取 GitHub 用户公开动态并推送到聊天会话
+desc: 通过 RSS 定时获取 GitHub 用户/仓库动态并推送到聊天会话
 version: v1.0.0
-author: AliveRiver
+author: aliveriver
 repo: https://github.com/aliveriver/astrbot_plugin_listen_github
 astrbot_version: ">=4.9.2"
