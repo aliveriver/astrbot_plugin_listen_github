@@ -311,7 +311,7 @@ class GitHubListenPlugin(Star):
               /gh_check <owner/repo> commit  查看仓库最新 Commit
         """
         parts = event.message_str.strip().split()
-        if not parts:
+        if len(parts) < 2:
             yield event.plain_result(
                 "❌ 请提供目标，例如：\n"
                 "  /gh_check torvalds（用户动态）\n"
@@ -320,8 +320,8 @@ class GitHubListenPlugin(Star):
             )
             return
 
-        target = parts[0]
-        check_type = parts[1].lower() if len(parts) > 1 else None
+        target = parts[1]
+        check_type = parts[2].lower() if len(parts) > 2 else None
 
         # 输入校验
         if "/" in target:
