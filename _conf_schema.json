@@ -40,5 +40,11 @@
         "type": "list",
         "default": [],
         "hint": "填写要推送的会话 UMO，可以通过 /sid 指令获取UMO。可通过 /gh_bindhere 指令在聊天中自动获取并绑定当前会话。"
+    },
+    "session_subscriptions": {
+        "description": "会话订阅映射（会话 UMO → 订阅的目标列表）",
+        "type": "dict",
+        "default": {},
+        "hint": "每个会话可订阅不同的监听目标。格式: {\"会话UMO\": [\"user:octocat\", \"repo:owner/repo\", \"commits:owner/repo\"]}。未配置订阅的会话将接收所有推送。可通过 /gh_sub 和 /gh_unsub 指令管理。"
     }
 }

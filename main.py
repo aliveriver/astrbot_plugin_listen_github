@@ -45,11 +45,12 @@ class GitHubListenPlugin(Star):
         self.cfg_watch_repos: List[str] = config.get("watch_repos", [])
         self.cfg_watch_repos_commits: List[str] = config.get("watch_repos_commits", [])
         self.cfg_bound_sessions: List[str] = config.get("bound_sessions", [])
+        self.cfg_session_subs: dict = config.get("session_subscriptions", {})
         self.cfg_timezone: str = config.get("timezone", "Asia/Shanghai")
         self._poll_task: Optional[asyncio.Task] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._initialized_keys: Set[str] = set()  # 已成功初始化游标的 kv_key
-        self._config_lock = asyncio.Lock()  # 保护 bound_sessions 并发写
+        self._config_lock = asyncio.Lock()  # 保护 bound_sessions / session_subscriptions 并发写
 
     @staticmethod
     def _normalize_watch_list(items: List[str], item_type: str) -> List[str]:
@@ -129,6 +130,69 @@ class GitHubListenPlugin(Star):
             ))
         return targets
 
+    @staticmethod
+    def _kv_key_to_sub_id(kv_key: str) -> str:
+        """将内部 kv_key 转换为用户可读的订阅标识符。
+        user_octocat -> user:octocat
+        repo_rel_owner_repo -> repo:owner/repo
+        repo_cmt_owner_repo -> commits:owner/repo
+        """
+        if kv_key.startswith("user_"):
+            return f"user:{kv_key[5:]}"
+        elif kv_key.startswith("repo_rel_"):
+            parts = kv_key[9:]
+            idx = parts.find("_")
+            if idx != -1:
+                return f"repo:{parts[:idx]}/{parts[idx+1:]}"
+            return f"repo:{parts}"
+        elif kv_key.startswith("repo_cmt_"):
+            parts = kv_key[9:]
+            idx = parts.find("_")
+            if idx != -1:
+                return f"commits:{parts[:idx]}/{parts[idx+1:]}"
+            return f"commits:{parts}"
+        return kv_key
+
+    @staticmethod
+    def _parse_sub_id(sub_id: str) -> Optional[str]:
+        """解析订阅标识符，返回规范化形式或 None（无效）。
+        支持格式: user:<name>, repo:<owner/repo>, commits:<owner/repo>
+        """
+        sub_id = sub_id.strip().lower()
+        if sub_id.startswith("user:"):
+            name = sub_id[5:]
+            if RE_USERNAME.match(name):
+                return f"user:{name}"
+        elif sub_id.startswith("repo:"):
+            repo = sub_id[5:]
+            if RE_REPO.match(repo):
+                return f"repo:{repo}"
+        elif sub_id.startswith("commits:"):
+            repo = sub_id[8:]
+            if RE_REPO.match(repo):
+                return f"commits:{repo}"
+        return None
+
+    def _get_all_sub_ids(self) -> List[str]:
+        """获取当前所有可订阅的目标标识符列表。"""
+        ids = []
+        for user in self.cfg_watch_users:
+            ids.append(f"user:{user.lower()}")
+        for repo in self.cfg_watch_repos:
+            ids.append(f"repo:{repo.lower()}")
+        for repo in self.cfg_watch_repos_commits:
+            ids.append(f"commits:{repo.lower()}")
+        return ids
+
+    def _session_should_receive(self, umo: str, sub_id: str) -> bool:
+        """判断某会话是否应接收某目标的推送。
+        如果会话没有配置订阅列表，则接收所有推送（向后兼容）。
+        """
+        subs = self.cfg_session_subs.get(umo)
+        if not subs:
+            return True
+        return sub_id in subs
+
     async def _init_cursors(self):
         """为所有监听目标初始化游标，防止首次启动推送历史消息。
         仅在成功获取并写入游标后才标记已初始化。
@@ -168,35 +232,34 @@ class GitHubListenPlugin(Star):
             await asyncio.sleep(self.poll_interval)
 
     async def _do_poll(self):
-        """执行一次轮询：仅拉取已初始化的目标，推送到绑定会话"""
+        """执行一次轮询：仅拉取已初始化的目标，按订阅关系推送到绑定会话"""
         targets = self._build_targets()
         if not targets or not self.cfg_bound_sessions:
             return
 
-        # 只轮询已初始化的目标，未初始化的跳过（等下一轮 _init_cursors 重试）
         ready_targets = [t for t in targets if t[2] in self._initialized_keys]
         if not ready_targets:
             return
 
-        # 并发拉取
         results = await asyncio.gather(
             *[self._fetch_new_entries(t[0], t[2]) for t in ready_targets],
             return_exceptions=True,
         )
 
-        # 并发推送
         send_tasks = []
         for target, result in zip(ready_targets, results):
-            _, display_name, _ = target
+            _, display_name, kv_key = target
             if isinstance(result, Exception):
                 logger.error(f"[GitHub Listen] 获取 {display_name} 失败: {result}")
                 continue
             if not result:
                 continue
+            sub_id = self._kv_key_to_sub_id(kv_key)
             msg = self._format_entries(display_name, result)
             chain = MessageChain().message(msg)
             for umo in self.cfg_bound_sessions:
-                send_tasks.append(self._safe_send(umo, chain))
+                if self._session_should_receive(umo, sub_id):
+                    send_tasks.append(self._safe_send(umo, chain))
 
         if send_tasks:
             await asyncio.gather(*send_tasks)
@@ -403,6 +466,173 @@ class GitHubListenPlugin(Star):
 
         yield event.plain_result(self._format_single_check(display_name, entries))
 
+    @filter.command("gh_sub")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def gh_sub(self, event: AstrMessageEvent):
+        """为当前会话订阅指定目标。
+        用法：/gh_sub user:octocat
+              /gh_sub repo:owner/repo
+              /gh_sub commits:owner/repo
+              /gh_sub all  （订阅所有目标）
+        """
+        umo = event.unified_msg_origin
+        parts = event.message_str.strip().split()
+        args = parts[1:] if len(parts) > 1 and parts[0].lower().rstrip("@") in {"/gh_sub", "gh_sub"} else parts
+
+        if not args:
+            yield event.plain_result(
+                "❌ 请提供订阅目标，例如：\n"
+                "  /gh_sub user:octocat\n"
+                "  /gh_sub repo:microsoft/vscode\n"
+                "  /gh_sub commits:microsoft/vscode\n"
+                "  /gh_sub all（订阅所有目标）"
+            )
+            return
+
+        if umo not in self.cfg_bound_sessions:
+            yield event.plain_result("⚠️ 当前会话尚未绑定，请先使用 /gh_bindhere 绑定。")
+            return
+
+        async with self._config_lock:
+            current_subs = list(self.cfg_session_subs.get(umo, []))
+
+            if args[0].lower() == "all":
+                self.cfg_session_subs.pop(umo, None)
+                self.config["session_subscriptions"] = self.cfg_session_subs
+                self.config.save_config()
+                yield event.plain_result("✅ 已设置为接收所有目标的推送（移除自定义订阅过滤）。")
+                return
+
+            all_valid_ids = self._get_all_sub_ids()
+            added = []
+            invalid = []
+            already = []
+
+            for arg in args:
+                sub_id = self._parse_sub_id(arg)
+                if not sub_id:
+                    invalid.append(arg)
+                    continue
+                if sub_id not in all_valid_ids:
+                    invalid.append(f"{arg}（未在监听列表中）")
+                    continue
+                if sub_id in current_subs:
+                    already.append(sub_id)
+                    continue
+                current_subs.append(sub_id)
+                added.append(sub_id)
+
+            if added:
+                self.cfg_session_subs[umo] = current_subs
+                self.config["session_subscriptions"] = self.cfg_session_subs
+                self.config.save_config()
+
+        lines = []
+        if added:
+            lines.append(f"✅ 已订阅：{', '.join(added)}")
+        if already:
+            lines.append(f"⚠️ 已存在：{', '.join(already)}")
+        if invalid:
+            lines.append(f"❌ 无效目标：{', '.join(invalid)}")
+        lines.append(f"\n当前订阅 {len(current_subs)} 个目标。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("gh_unsub")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def gh_unsub(self, event: AstrMessageEvent):
+        """取消当前会话对指定目标的订阅。
+        用法：/gh_unsub user:octocat
+              /gh_unsub repo:owner/repo
+              /gh_unsub commits:owner/repo
+              /gh_unsub all  （清空订阅列表，恢复接收所有推送）
+        """
+        umo = event.unified_msg_origin
+        parts = event.message_str.strip().split()
+        args = parts[1:] if len(parts) > 1 and parts[0].lower().rstrip("@") in {"/gh_unsub", "gh_unsub"} else parts
+
+        if not args:
+            yield event.plain_result(
+                "❌ 请提供要取消的目标，例如：\n"
+                "  /gh_unsub user:octocat\n"
+                "  /gh_unsub repo:microsoft/vscode\n"
+                "  /gh_unsub all（清空订阅，恢复接收所有推送）"
+            )
+            return
+
+        if umo not in self.cfg_bound_sessions:
+            yield event.plain_result("⚠️ 当前会话尚未绑定。")
+            return
+
+        async with self._config_lock:
+            current_subs = list(self.cfg_session_subs.get(umo, []))
+
+            if args[0].lower() == "all":
+                self.cfg_session_subs.pop(umo, None)
+                self.config["session_subscriptions"] = self.cfg_session_subs
+                self.config.save_config()
+                yield event.plain_result("✅ 已清空订阅列表，将接收所有目标的推送。")
+                return
+
+            removed = []
+            not_found = []
+
+            for arg in args:
+                sub_id = self._parse_sub_id(arg)
+                if not sub_id:
+                    not_found.append(arg)
+                    continue
+                if sub_id in current_subs:
+                    current_subs.remove(sub_id)
+                    removed.append(sub_id)
+                else:
+                    not_found.append(arg)
+
+            if removed:
+                if current_subs:
+                    self.cfg_session_subs[umo] = current_subs
+                else:
+                    self.cfg_session_subs.pop(umo, None)
+                self.config["session_subscriptions"] = self.cfg_session_subs
+                self.config.save_config()
+
+        lines = []
+        if removed:
+            lines.append(f"✅ 已取消订阅：{', '.join(removed)}")
+        if not_found:
+            lines.append(f"⚠️ 未找到：{', '.join(not_found)}")
+        if current_subs:
+            lines.append(f"\n剩余订阅 {len(current_subs)} 个目标。")
+        else:
+            lines.append("\n当前无自定义订阅，将接收所有目标的推送。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("gh_mysubs")
+    async def gh_mysubs(self, event: AstrMessageEvent):
+        """查看当前会话的订阅列表"""
+        umo = event.unified_msg_origin
+        if umo not in self.cfg_bound_sessions:
+            yield event.plain_result("⚠️ 当前会话尚未绑定，请先使用 /gh_bindhere 绑定。")
+            return
+
+        subs = self.cfg_session_subs.get(umo)
+        if not subs:
+            yield event.plain_result("📋 当前会话未设置自定义订阅，将接收所有目标的推送。\n使用 /gh_sub 可订阅特定目标。")
+            return
+
+        lines = ["📋 当前会话的订阅列表：\n"]
+        for sub_id in subs:
+            if sub_id.startswith("user:"):
+                lines.append(f"  👤 {sub_id}")
+            elif sub_id.startswith("repo:"):
+                lines.append(f"  📦 {sub_id}")
+            elif sub_id.startswith("commits:"):
+                lines.append(f"  📝 {sub_id}")
+            else:
+                lines.append(f"  • {sub_id}")
+        lines.append(f"\n共 {len(subs)} 个订阅目标。")
+        lines.append("使用 /gh_unsub all 可清空订阅（恢复接收所有推送）。")
+        yield event.plain_result("\n".join(lines))
+
     @filter.command("gh_bindhere")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def gh_bindhere(self, event: AstrMessageEvent):
@@ -432,9 +662,11 @@ class GitHubListenPlugin(Star):
                 return
             self.cfg_bound_sessions.remove(umo)
             self.config["bound_sessions"] = self.cfg_bound_sessions
+            self.cfg_session_subs.pop(umo, None)
+            self.config["session_subscriptions"] = self.cfg_session_subs
             self.config.save_config()
         yield event.plain_result(
-            f"✅ 已解绑当前会话。\n"
+            f"✅ 已解绑当前会话（同时清除订阅配置）。\n"
             f"剩余 {len(self.cfg_bound_sessions)} 个绑定会话。"
         )
 
