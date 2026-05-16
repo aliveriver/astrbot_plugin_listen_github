@@ -9,36 +9,44 @@
         "description": "每次最多推送条目数",
         "type": "int",
         "default": 5,
-        "hint": "单次推送每个用户/仓库最多显示多少条新动态，设为 0 则不限制"
+        "hint": "单次推送每个用户或仓库最多显示多少条新动态；设为 0 表示不限制"
     },
     "watch_users": {
         "description": "监听的 GitHub 用户列表",
         "type": "list",
         "default": [],
-        "hint": "填写要监听动态的 GitHub 用户名，如 torvalds、octocat"
+        "hint": "填写要监听动态的 GitHub 用户名，例如 torvalds、octocat"
     },
     "watch_repos": {
-        "description": "监听的 GitHub 仓库列表",
+        "description": "监听 Release 的 GitHub 仓库列表",
         "type": "list",
         "default": [],
-        "hint": "填写要监听 Release 的仓库，格式为 owner/repo，如 microsoft/vscode"
+        "hint": "填写要监听 Release 的仓库，格式为 owner/repo，例如 microsoft/vscode"
     },
     "watch_repos_commits": {
         "description": "监听 Commit 的 GitHub 仓库列表",
         "type": "list",
         "default": [],
-        "hint": "填写要监听最新提交的仓库，格式为 owner/repo，如 AstrBotDevs/AstrBot"
+        "hint": "填写要监听最新提交的仓库，格式为 owner/repo，例如 AstrBotDevs/AstrBot"
     },
     "timezone": {
         "description": "时区",
         "type": "string",
         "default": "Asia/Shanghai",
-        "hint": "用于将 GitHub 动态的时间转换为本地时间，如 Asia/Shanghai、America/New_York、Europe/London"
+        "hint": "用于将 GitHub 动态时间转换为本地时间，例如 Asia/Shanghai、America/New_York、Europe/London"
     },
     "bound_sessions": {
         "description": "绑定的推送会话列表",
         "type": "list",
         "default": [],
-        "hint": "填写要推送的会话 UMO，可以通过 /sid 指令获取UMO。可通过 /gh_bindhere 指令在聊天中自动获取并绑定当前会话。"
+        "hint": "填写要推送的会话 UMO，可通过 /sid 指令获取，也可通过 /gh_bindhere 在聊天中自动绑定当前会话"
+    },
+    "session_subscriptions_json": {
+        "description": "会话订阅映射 JSON",
+        "type": "text",
+        "default": "{}",
+        "editor_mode": true,
+        "editor_language": "json",
+        "hint": "每个会话可订阅不同监听目标。键为会话 UMO，值为订阅目标列表。示例：{\"会话UMO\": [\"user:octocat\", \"repo:owner/repo\", \"commits:owner/repo\"]}。也可通过 /gh_sub 和 /gh_unsub 指令管理"
     }
 }
